@@ -1,11 +1,12 @@
 import numpy as np
-import time, sys, math
+import time
 from collections import deque
 import sounddevice as sd
 
-from raspberry_pi_controller.audio_reactor.utils import *
+from ex_wall_audio_reactor.audio_tools.utils import NumpyDataBuffer
 
-class Stream_Reader:
+
+class StreamReader:
     """
     The Stream_Reader continuously reads data from a selected sound source using PyAudio
 
@@ -24,9 +25,9 @@ class Stream_Reader:
         FFT_window_size = None,
         verbose = False):
 
-        # print("Available audio devices:")
-        # device_dict = sd.query_devices()
-        # print(device_dict)
+        print("Available audio devices:")
+        device_dict = sd.query_devices()
+        print(device_dict)
 
         try:
             sd.check_input_settings(device=device, channels=1, dtype=np.float32, extra_settings=None, samplerate=rate)
@@ -61,9 +62,6 @@ class Stream_Reader:
         self.update_window_n_frames = max(self.optimal_data_lengths)
         del self.optimal_data_lengths
 
-        #Alternative:
-        #self.update_window_n_frames = round_up_to_even(44100 / updates_per_second)
-
         self.stream = sd.InputStream(
                                     samplerate=self.rate,
                                     blocksize=self.update_window_n_frames,
@@ -87,13 +85,13 @@ class Stream_Reader:
 
         self.device_latency = device_dict[self.device]['default_low_input_latency']
 
-        # print("\n##################################################################################################")
-        # print("\nDefaulted to using first working mic, Running on mic %s with properties:" %str(self.device))
-        # print(device_dict[self.device])
-        # print('Which has a latency of %.2f ms' %(1000*self.device_latency))
-        # print("\n##################################################################################################")
-        # print('Recording audio at %d Hz\nUsing (non-overlapping) data-windows of %d samples (updating at %.2ffps)'
-        #     %(self.rate, self.update_window_n_frames, self.updates_per_second))
+        print("\n##################################################################################################")
+        print("\nDefaulted to using first working mic, Running on mic %s with properties:" %str(self.device))
+        print(device_dict[self.device])
+        print('Which has a latency of %.2f ms' %(1000*self.device_latency))
+        print("\n##################################################################################################")
+        print('Recording audio at %d Hz\nUsing (non-overlapping) data-windows of %d samples (updating at %.2ffps)'
+            %(self.rate, self.update_window_n_frames, self.updates_per_second))
 
     def non_blocking_stream_read(self, indata, frames, time_info, status):
         if self.verbose:
@@ -122,11 +120,11 @@ class Stream_Reader:
         self.data_windows_to_buffer = data_windows_to_buffer
 
         if data_windows_to_buffer is None:
-            self.data_windows_to_buffer = int(self.updates_per_second / 2) #By default, buffer 0.5 second of audio
+            self.data_windows_to_buffer = int(self.updates_per_second / 2)  # By default, buffer 0.5 second of audio
         else:
             self.data_windows_to_buffer = data_windows_to_buffer
 
-        self.data_buffer = numpy_data_buffer(self.data_windows_to_buffer, self.update_window_n_frames)
+        self.data_buffer = NumpyDataBuffer(self.data_windows_to_buffer, self.update_window_n_frames)
 
         print("\n--🎙  -- Starting live audio stream...\n")
         self.stream.start()

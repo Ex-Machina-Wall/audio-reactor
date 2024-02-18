@@ -1,11 +1,14 @@
 import numpy as np
 import pyaudio
-import time, sys, math
+import time
+import sys
+import math
 from collections import deque
 
-from raspberry_pi_controller.audio_reactor.utils import *
+from ex_wall_audio_reactor.audio_tools.utils import round_up_to_even, NumpyDataBuffer
 
-class Stream_Reader:
+
+class StreamReader:
     """
     The Stream_Reader continuously reads data from a selected sound source using PyAudio
 
@@ -28,8 +31,8 @@ class Stream_Reader:
         self.verbose = verbose
         self.pa = pyaudio.PyAudio()
 
-        #Temporary variables #hacks!
-        self.update_window_n_frames = 1024 #Don't remove this, needed for device testing!
+        # Temporary variables #hacks!
+        self.update_window_n_frames = 1024  # Don't remove this, needed for device testing!
         self.data_buffer = None
 
         self.device = device
@@ -85,7 +88,7 @@ class Stream_Reader:
         else:
             self.data_windows_to_buffer = data_windows_to_buffer
 
-        self.data_buffer = numpy_data_buffer(self.data_windows_to_buffer, self.update_window_n_frames)
+        self.data_buffer = NumpyDataBuffer(self.data_windows_to_buffer, self.update_window_n_frames)
 
         print("\n-- Starting live audio stream...\n")
         self.stream.start_stream()
