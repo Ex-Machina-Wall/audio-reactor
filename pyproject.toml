@@ -16,7 +16,7 @@ python-decouple = "^3.8"
 
 
 [tool.poetry.group.dev.dependencies]
-ex-wall-frame-transmitter = {git = "https://github.com/Ex-Machina-Wall/frame-transmitter.git", branch = "adding-handshake"}
+ex-wall-frame-transmitter = {git = "https://github.com/Ex-Machina-Wall/frame-transmitter.git"}
 
 [build-system]
 requires = ["poetry-core"]
