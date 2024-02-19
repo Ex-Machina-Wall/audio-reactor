@@ -6,7 +6,7 @@ authors = ["Trevor O'Leary <git@trevoroleary.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.9, ^3.10, ^3.11"
+python = "^3.9"
 numpy = "^1.26.4"
 scipy = "^1.12.0"
 pygame = "^2.5.2"
