@@ -47,8 +47,8 @@ class AudioEffect:
 
     """ Incoming command Handlers """
 
-    def get_frame(self) -> np.array:
-        current_frame = np.zeros((HEIGHT, WIDTH, 3))
+    def get_frame(self, current_frame: np.array = None) -> np.array:
+        current_frame = np.zeros((HEIGHT, WIDTH, 3)) if current_frame is None else current_frame
 
         _, _, _, amplitudes = self.stream_analyzer.get_audio_features()
         # print(max(amplitudes))
