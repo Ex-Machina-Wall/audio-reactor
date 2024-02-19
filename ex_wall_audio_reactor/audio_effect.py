@@ -51,7 +51,7 @@ class AudioEffect:
         current_frame = np.zeros((HEIGHT, WIDTH, 3))
 
         _, _, _, amplitudes = self.stream_analyzer.get_audio_features()
-        print(max(amplitudes))
+        # print(max(amplitudes))
         current_frame = self.get_perimeter_pulse(current_frame, amplitudes)
 
         current_frame = self.add_bass_pulse(current_frame, amplitudes)
@@ -115,18 +115,3 @@ class AudioEffect:
 
         # self.logger.debug(f"Duration {end_time-start_time:.4f}s")
         return current_frame
-
-
-def main():
-    from decouple import config
-    from ex_wall_frame_transmitter import FrameTransmitter
-    wall_transmitter = FrameTransmitter(destination_uri=config("DESTINATION_URI"))
-    wall_transmitter.start()
-    effect = AudioEffect(device=1)
-    while True:
-        wall_transmitter.send_numpy_frame(pid_gain=30, np_frame=effect.get_frame())
-        time.sleep(1/40)
-
-
-if __name__ == "__main__":
-    main()
