@@ -30,8 +30,8 @@ class AudioEffect:
         # quiet passages around -30 dBFS. Defaults react on moderately loud audio.
         self.high_frequency_react_state = True
         self.low_frequency_react_state = True
-        self.high_frequency_threshold = -25.0  # dBFS
-        self.low_frequency_threshold = -20.0   # dBFS
+        self.high_frequency_threshold = -30.0  # dBFS
+        self.low_frequency_threshold = -28.0   # dBFS
 
     @property
     def primary_color_scaled(self) -> tuple:
