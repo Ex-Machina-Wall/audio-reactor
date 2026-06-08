@@ -46,15 +46,7 @@ class StreamAnalyzer:
         self.height = height
         self.window_ratio = window_ratio
 
-        try:
-            from ex_wall_audio_reactor.audio_tools.stream_reader_pyaudio import StreamReader
-            self.stream_reader = StreamReader(
-                device=device,
-                rate=rate,
-                updates_per_second=updates_per_second,
-                verbose=verbose)
-            self.using_py_audio = True
-        except:
+        if isinstance(device, str):
             from ex_wall_audio_reactor.audio_tools.stream_reader_sounddevice import StreamReader
             self.stream_reader = StreamReader(
                 device=device,
@@ -62,6 +54,23 @@ class StreamAnalyzer:
                 updates_per_second=updates_per_second,
                 verbose=verbose)
             self.using_py_audio = False
+        else:
+            try:
+                from ex_wall_audio_reactor.audio_tools.stream_reader_pyaudio import StreamReader
+                self.stream_reader = StreamReader(
+                    device=device,
+                    rate=rate,
+                    updates_per_second=updates_per_second,
+                    verbose=verbose)
+                self.using_py_audio = True
+            except Exception:
+                from ex_wall_audio_reactor.audio_tools.stream_reader_sounddevice import StreamReader
+                self.stream_reader = StreamReader(
+                    device=device,
+                    rate=rate,
+                    updates_per_second=updates_per_second,
+                    verbose=verbose)
+                self.using_py_audio = False
 
         self.rate = self.stream_reader.rate
 

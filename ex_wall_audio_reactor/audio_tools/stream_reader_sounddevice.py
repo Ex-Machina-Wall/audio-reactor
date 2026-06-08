@@ -1,9 +1,49 @@
 import numpy as np
+import os
+import subprocess
 import time
 from collections import deque
 import sounddevice as sd
 
 from ex_wall_audio_reactor.audio_tools.utils import NumpyDataBuffer
+from ex_wall_audio_reactor.exceptions import AudioDeviceNotFound
+
+
+# ALSA device names that the PipeWire/PulseAudio shim exposes natively. Anything
+# else passed as a string is treated as a PulseAudio source name and routed via
+# PULSE_SOURCE + the 'pipewire' ALSA device.
+_ALSA_PASSTHROUGH = {"pipewire", "default"}
+
+
+def _verify_pulse_source_exists(name: str) -> None:
+    """Raise AudioDeviceNotFound if the named PulseAudio source isn't present.
+
+    Necessary because PortAudio's ALSA->pulse shim silently falls back to the
+    default source if PULSE_SOURCE points at a nonexistent name.
+    """
+    try:
+        result = subprocess.run(
+            ["pactl", "list", "short", "sources"],
+            capture_output=True, text=True, timeout=2,
+        )
+    except FileNotFoundError as e:
+        raise AudioDeviceNotFound(
+            f"Cannot check PulseAudio sources: 'pactl' not found. "
+            f"Install pulseaudio-utils, or pass device='pipewire'/'default' "
+            f"to use the ALSA shim default source."
+        ) from e
+    sources = {
+        line.split("\t")[1]
+        for line in result.stdout.strip().splitlines()
+        if "\t" in line
+    }
+    if name not in sources:
+        raise AudioDeviceNotFound(
+            f"Expected PulseAudio/PipeWire source {name!r} is not present. "
+            f"Available sources: {sorted(sources)}. "
+            f"Is the visualizer_sink PipeWire conf loaded? "
+            f"Run: pactl list short sources"
+        )
 
 
 class StreamReader:
@@ -29,12 +69,22 @@ class StreamReader:
         device_dict = sd.query_devices()
         print(device_dict)
 
+        if isinstance(device, str) and device not in _ALSA_PASSTHROUGH:
+            # PipeWire/PulseAudio source name. Route via PULSE_SOURCE + the
+            # 'pipewire' ALSA device, after verifying the source exists.
+            _verify_pulse_source_exists(device)
+            os.environ["PULSE_SOURCE"] = device
+            device = "pipewire"
+
         try:
             sd.check_input_settings(device=device, channels=1, dtype=np.float32, extra_settings=None, samplerate=rate)
-        except:
-            print("Input sound settings for device %s and samplerate %s Hz not supported, using defaults..." %(str(device), str(rate)))
+        except Exception as e:
+            if device is not None:
+                raise AudioDeviceNotFound(
+                    f"Cannot open audio device {device!r}: {e}"
+                ) from e
+            print("Input sound settings for default device not supported, using defaults...")
             rate = None
-            device = None
 
         self.rate = rate
         if rate is not None:
