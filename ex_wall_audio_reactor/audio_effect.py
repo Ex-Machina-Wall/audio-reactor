@@ -1,5 +1,6 @@
 import time
 
+from decouple import config
 from ex_wall_frame_transmitter.constants import WIDTH, HEIGHT
 from ex_wall_audio_reactor.audio_tools.stream_analyzer import StreamAnalyzer
 import numpy as np
@@ -8,8 +9,10 @@ from math import sqrt
 
 class AudioEffect:
 
-    def __init__(self, device: int = None):
+    def __init__(self, device=None):
         super().__init__()
+        if device is None:
+            device = config("EX_WALL_AUDIO_INPUT", default="visualizer_sink.monitor")
         self.np_frame = np.array([[(0, 0, 0) for _ in range(WIDTH)] for _ in range(HEIGHT)])
         self.stream_analyzer = StreamAnalyzer(device=device)
 
