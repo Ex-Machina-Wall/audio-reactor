@@ -13,6 +13,22 @@ from ex_wall_audio_reactor.audio_tools.fft import get_fft
 from ex_wall_audio_reactor.audio_tools.utils import round_up_to_even, get_smoothing_filter, NumpyDataBuffer
 
 
+# Frequency-bin-energy values are reported in dBFS-like units so thresholds
+# are independent of sample format (int16 vs float32) and input gain.
+#
+# DBFS_REFERENCE was calibrated empirically against pipewire-pulse output at
+# 100% volume: a typical loud music passage produces linear bin energies
+# around 100–200 with the current FFT window + pink-noise normalization. A
+# reference of 200 puts loud peaks near 0 dBFS and quiet passages around
+# -30 to -20 dBFS. The exact value is not critical — adjust if your normal
+# input level differs noticeably and the threshold sliders feel off.
+DBFS_REFERENCE = 200.0
+
+# Floor for bin energies after dB conversion. Values below this are clamped
+# to prevent -inf from feeding into smoothing / thresholding math.
+DBFS_NOISE_FLOOR = -80.0
+
+
 class StreamAnalyzer:
     """
     The Audio_Analyzer class provides access to continuously recorded
@@ -128,7 +144,8 @@ class StreamAnalyzer:
         self.power_normalization_coefficients = np.logspace(np.log2(1), np.log2(np.log2(self.rate / 2)), len(self.fftx),
                                                             endpoint=True, base=2, dtype=None)
         self.rolling_stats_window_n = self.rolling_stats_window_s * self.fft_fps  # Assumes ~30 FFT features per second
-        self.rolling_bin_values = NumpyDataBuffer(self.rolling_stats_window_n, self.n_frequency_bins, start_value=25000)
+        # start_value is in the same dB units as bin energies post-conversion
+        self.rolling_bin_values = NumpyDataBuffer(self.rolling_stats_window_n, self.n_frequency_bins, start_value=DBFS_NOISE_FLOOR)
         self.bin_mean_values = np.ones(self.n_frequency_bins)
 
         print("Using FFT_window_size length of %d for FFT ---> window_size = %dms" % (
@@ -167,6 +184,13 @@ class StreamAnalyzer:
         for bin_index in range(self.n_frequency_bins):
             self.frequency_bin_energies[bin_index] = np.mean(self.fft[self.fftx_indices_per_bin[bin_index]])
 
+        # Convert linear bin energies to dBFS-like units. See module-level
+        # DBFS_REFERENCE / DBFS_NOISE_FLOOR docstrings for calibration rationale.
+        self.frequency_bin_energies = 20.0 * np.log10(
+            np.maximum(self.frequency_bin_energies, 1e-9) / DBFS_REFERENCE
+        )
+        self.frequency_bin_energies = np.maximum(self.frequency_bin_energies, DBFS_NOISE_FLOOR)
+
         return
 
     def get_audio_features(self):
@@ -179,11 +203,13 @@ class StreamAnalyzer:
             self.update_rolling_stats()
             self.stream_reader.new_data = False
 
-            self.frequency_bin_energies = np.nan_to_num(self.frequency_bin_energies, copy=True)
+            self.frequency_bin_energies = np.nan_to_num(self.frequency_bin_energies, copy=True, nan=DBFS_NOISE_FLOOR, neginf=DBFS_NOISE_FLOOR)
             if self.apply_frequency_smoothing:
                 if self.filter_width > 3:
                     self.frequency_bin_energies = savgol_filter(self.frequency_bin_energies, self.filter_width, 3)
-            self.frequency_bin_energies[self.frequency_bin_energies < 0] = 0
+            # Re-clamp to noise floor after smoothing (savgol can push values
+            # slightly below the floor at edges).
+            self.frequency_bin_energies = np.maximum(self.frequency_bin_energies, DBFS_NOISE_FLOOR)
 
             if self.verbose:
                 self.delays.append(time.time() - start)

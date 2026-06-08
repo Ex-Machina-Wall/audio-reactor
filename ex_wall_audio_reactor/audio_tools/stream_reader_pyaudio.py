@@ -71,7 +71,12 @@ class StreamReader:
             start = time.time()
 
         if self.data_buffer is not None:
-            self.data_buffer.append_data(np.frombuffer(in_data, dtype=np.int16))
+            # Normalize int16 PCM to float32 in [-1.0, +1.0] so the downstream
+            # FFT pipeline produces the same numerical scale regardless of whether
+            # samples came from PyAudio (int16) or sounddevice (float32). Without
+            # this, FFT magnitudes would differ by a factor of 32768.
+            samples = np.frombuffer(in_data, dtype=np.int16).astype(np.float32) / 32768.0
+            self.data_buffer.append_data(samples)
             self.new_data = True
 
         if self.verbose:

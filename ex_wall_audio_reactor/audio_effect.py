@@ -9,6 +9,11 @@ from math import sqrt
 
 class AudioEffect:
 
+    # Number of dB above each threshold at which the LED response saturates
+    # (renders the full visual extent). Smaller value = "twitchier" response,
+    # larger value = "smoother" response across the dynamic range.
+    DYNAMIC_RANGE_DB = 15.0
+
     def __init__(self, device=None):
         super().__init__()
         if device is None:
@@ -20,15 +25,13 @@ class AudioEffect:
         self.brightness = 100
         self.primary_color = (255, 0, 0)
 
+        # Thresholds are now in dBFS-like units (see stream_analyzer.DBFS_REFERENCE).
+        # Same scale regardless of audio backend. Typical loud music peaks near 0 dBFS;
+        # quiet passages around -30 dBFS. Defaults react on moderately loud audio.
         self.high_frequency_react_state = True
         self.low_frequency_react_state = True
-        if self.stream_analyzer.using_py_audio:
-            # Py audio seems to decode the audio into much larger numbers
-            self.high_frequency_threshold = 170000
-            self.low_frequency_threshold = 300000
-        else:
-            self.high_frequency_threshold = 10  # 170000
-            self.low_frequency_threshold = 30  # 300000
+        self.high_frequency_threshold = -25.0  # dBFS
+        self.low_frequency_threshold = -20.0   # dBFS
 
     @property
     def primary_color_scaled(self) -> tuple:
@@ -60,6 +63,15 @@ class AudioEffect:
         current_frame = self.add_bass_pulse(current_frame, amplitudes)
         return current_frame
 
+    def _activation(self, amplitude_db, threshold_db):
+        """Map a bin energy (dBFS) relative to its threshold to [0, 1].
+
+        Returns 0 when amplitude is at or below threshold, 1 when amplitude
+        is DYNAMIC_RANGE_DB or more above threshold, linear in between.
+        """
+        excess = amplitude_db - threshold_db
+        return max(0.0, min(excess / self.DYNAMIC_RANGE_DB, 1.0))
+
     def get_perimeter_pulse(self, current_frame, amplitudes) -> np.array:
         if not self.high_frequency_react_state:
             return current_frame
@@ -76,7 +88,7 @@ class AudioEffect:
                         amplitude = amplitudes[-x]
                     else:
                         amplitude = amplitudes[int(-middle_point_x + (-middle_point_x + x))]
-                    height = round(min(amplitude / self.high_frequency_threshold, 1) * max_height + 0.5)
+                    height = round(self._activation(amplitude, self.high_frequency_threshold) * max_height + 0.5)
                     if y < height:
                         current_frame[y][x] = frame_color
                 # We are on the bottom half section
@@ -85,7 +97,7 @@ class AudioEffect:
                         amplitude = amplitudes[-x]
                     else:
                         amplitude = amplitudes[int(-middle_point_x + (-middle_point_x + x))]
-                    height = round(min(amplitude / self.high_frequency_threshold, 1) * max_height + 0.5)
+                    height = round(self._activation(amplitude, self.high_frequency_threshold) * max_height + 0.5)
                     if (HEIGHT - y - 1) < height:
                         current_frame[y][x] = frame_color
 
@@ -98,7 +110,7 @@ class AudioEffect:
         max_height = 4
 
         amplitude = sum(amplitudes[:3]) / len(amplitudes[:3])
-        target_radius = round(min(amplitude / self.low_frequency_threshold, 1) * max_height)
+        target_radius = round(self._activation(amplitude, self.low_frequency_threshold) * max_height)
 
         # Start drawing the circles
         y_offset = 6
