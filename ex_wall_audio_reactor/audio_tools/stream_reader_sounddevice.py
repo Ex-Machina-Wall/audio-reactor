@@ -1,12 +1,28 @@
+import logging
 import numpy as np
 import os
 import subprocess
+import threading
 import time
 from collections import deque
 import sounddevice as sd
 
 from ex_wall_audio_reactor.audio_tools.utils import NumpyDataBuffer
 from ex_wall_audio_reactor.exceptions import AudioDeviceNotFound
+
+logger = logging.getLogger(__name__)
+
+# Diagnostic: log audio callback activity every N seconds so we can see when
+# the input stream stops delivering samples (e.g. on a PipeWire source
+# SUSPEND/RESUME cycle when an AirPlay/Spotify client reconnects).
+_CALLBACK_LOG_INTERVAL_S = 5.0
+
+# Watchdog: if no audio callback fires for this many seconds, assume the
+# InputStream has silently stalled (a known failure mode when the underlying
+# PipeWire source goes SUSPENDED and then RESUMES — sounddevice / PortAudio's
+# ALSA-pulse path does not always re-open cleanly) and rebuild the stream.
+_WATCHDOG_STALL_THRESHOLD_S = 3.0
+_WATCHDOG_CHECK_INTERVAL_S = 1.0
 
 
 # ALSA device names that the PipeWire/PulseAudio shim exposes natively. Anything
@@ -96,6 +112,19 @@ class StreamReader:
 
         self.verbose = verbose
         self.data_buffer = None
+        # Diagnostic counters for the audio callback. Logged periodically
+        # from the callback itself so we can spot stream stalls.
+        self._cb_count = 0
+        self._cb_silent_count = 0
+        self._cb_peak_since_log = 0.0
+        self._cb_last_log_ts = 0.0
+        self._cb_last_status_count = 0
+        # Watchdog state — tracks "when did a callback last fire" and the
+        # supervisor thread that rebuilds the stream on stall.
+        self._last_cb_time = time.monotonic()
+        self._watchdog_thread = None
+        self._watchdog_stop = threading.Event()
+        self._stream_lock = threading.Lock()
 
         # This part is a bit hacky, need better solution for this:
         # Determine what the optimal buffer shape is by streaming some test audio
@@ -153,6 +182,45 @@ class StreamReader:
             self.data_buffer.append_data(indata[:,0])
             self.new_data = True
 
+        # Heartbeat for the watchdog. Even silent audio counts: as long as
+        # the callback fires, the stream is alive.
+        self._last_cb_time = time.monotonic()
+
+        # Diagnostic logging: tally callback activity and emit a summary every
+        # _CALLBACK_LOG_INTERVAL_S seconds. If the stream silently dies, the
+        # log just stops; if the stream is alive but the source is silent,
+        # peak stays near 0 while count keeps growing.
+        self._cb_count += 1
+        peak = float(np.abs(indata[:, 0]).max()) if frames else 0.0
+        if peak < 1e-5:
+            self._cb_silent_count += 1
+        if peak > self._cb_peak_since_log:
+            self._cb_peak_since_log = peak
+        if status:
+            self._cb_last_status_count += 1
+
+        now = time.monotonic()
+        if self._cb_last_log_ts == 0.0:
+            self._cb_last_log_ts = now
+        elif now - self._cb_last_log_ts >= _CALLBACK_LOG_INTERVAL_S:
+            elapsed = now - self._cb_last_log_ts
+            # Use print() rather than logger so it lands in journalctl from
+            # the systemd unit's StandardOutput=journal without needing the
+            # caller to configure logging handlers for our module.
+            print(
+                "[audio-reactor cb] %d calls in %.1fs (%.0f/s), peak=%.4f, silent=%d, status_events=%d" % (
+                    self._cb_count, elapsed, self._cb_count / elapsed,
+                    self._cb_peak_since_log, self._cb_silent_count,
+                    self._cb_last_status_count,
+                ),
+                flush=True,
+            )
+            self._cb_count = 0
+            self._cb_silent_count = 0
+            self._cb_peak_since_log = 0.0
+            self._cb_last_status_count = 0
+            self._cb_last_log_ts = now
+
         if self.verbose:
             self.num_data_captures += 1
             self.data_capture_delays.append(time.time() - start)
@@ -177,9 +245,79 @@ class StreamReader:
         self.data_buffer = NumpyDataBuffer(self.data_windows_to_buffer, self.update_window_n_frames)
 
         print("\n--🎙  -- Starting live audio stream...\n")
-        self.stream.start()
+        with self._stream_lock:
+            self.stream.start()
+            self._last_cb_time = time.monotonic()
         self.stream_start_time = time.time()
+        self._start_watchdog()
+
+    def _start_watchdog(self):
+        if self._watchdog_thread is not None and self._watchdog_thread.is_alive():
+            return
+        self._watchdog_stop.clear()
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop,
+            name="AudioStreamWatchdog",
+            daemon=True,
+        )
+        self._watchdog_thread.start()
+
+    def _watchdog_loop(self):
+        """Rebuild the InputStream if no audio callback has fired recently.
+
+        Triggered by the PipeWire null-sink monitor going through a
+        SUSPEND/RESUME cycle when an AirPlay/Spotify client reconnects:
+        sounddevice's InputStream stops calling the callback and never
+        recovers on its own.
+        """
+        while not self._watchdog_stop.wait(_WATCHDOG_CHECK_INTERVAL_S):
+            if self.data_buffer is None:
+                continue
+            since_cb = time.monotonic() - self._last_cb_time
+            if since_cb < _WATCHDOG_STALL_THRESHOLD_S:
+                continue
+            print(
+                "[audio-reactor watchdog] stream stalled (%.1fs since last callback), rebuilding…" % since_cb,
+                flush=True,
+            )
+            try:
+                self._rebuild_stream()
+            except Exception as e:
+                print(
+                    "[audio-reactor watchdog] rebuild failed: %r; will retry" % e,
+                    flush=True,
+                )
+                # Reset heartbeat so we don't immediately retry on the next tick
+                self._last_cb_time = time.monotonic()
+
+    def _rebuild_stream(self):
+        with self._stream_lock:
+            try:
+                self.stream.stop()
+                self.stream.close()
+            except Exception as e:
+                print(
+                    "[audio-reactor watchdog] error stopping stale stream: %r (continuing)" % e,
+                    flush=True,
+                )
+            self.stream = sd.InputStream(
+                samplerate=self.rate,
+                blocksize=self.update_window_n_frames,
+                device=None,
+                channels=1,
+                dtype=np.float32,
+                latency='low',
+                extra_settings=None,
+                callback=self.non_blocking_stream_read,
+            )
+            self.stream.start()
+            self._last_cb_time = time.monotonic()
+        print("[audio-reactor watchdog] stream rebuilt successfully", flush=True)
 
     def terminate(self):
         print("👋  Sending stream termination command...")
-        self.stream.stop()
+        self._watchdog_stop.set()
+        if self._watchdog_thread is not None:
+            self._watchdog_thread.join(timeout=2)
+        with self._stream_lock:
+            self.stream.stop()
